@@ -31,23 +31,34 @@ import re
 import sys
 import os
 
-# ------------------------- CONFIGURACIÓN DE LA BASE DE DATOS -------------------------
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',          # Cambia por tu usuario
-    'password': '',          # Cambia por tu contraseña
-    'database': 'club_socios',
-    'raise_on_warnings': True
-}
+# Importar configuración
+try:
+    from config import DB_CONFIG, FERNET_KEY
+except ImportError:
+    print("ERROR: No se encontró el archivo config.py")
+    print("Por favor, asegúrate de tener config.py en la misma carpeta que interfas.py")
+    sys.exit(1)
 
-# Clave para encriptar números de tarjeta (guardar en un archivo seguro en producción)
-FERNET_KEY = Fernet.generate_key()  # En producción usar una clave fija guardada en variables de entorno
-cipher = Fernet(FERNET_KEY)
+# Clave para encriptar números de tarjeta
+if FERNET_KEY:
+    cipher = Fernet(FERNET_KEY)
+else:
+    cipher = Fernet(Fernet.generate_key())
 
 # ------------------------- FUNCIONES DE BASE DE DATOS -------------------------
 def get_db_connection():
-    """Retorna una conexión a MySQL."""
-    return mysql.connector.connect(**DB_CONFIG)
+    """Retorna una conexión a MariaDB/MySQL."""
+    try:
+        return mysql.connector.connect(**DB_CONFIG)
+    except Error as e:
+        messagebox.showerror("Error de conexión", 
+            f"No se puede conectar a la base de datos.\n\n"
+            f"Error: {e}\n\n"
+            f"Verifica:\n"
+            f"1. MariaDB está corriendo\n"
+            f"2. Credenciales en config.py son correctas\n"
+            f"3. La base de datos 'club_socios' existe")
+        return None
 
 def ejecutar_script_sql(script):
     """Ejecuta un script SQL completo (para inicializar la BD)."""
@@ -174,27 +185,34 @@ class LoginApp:
             return
         
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT u.*, r.nombre as rol_nombre 
-            FROM USUARIO u 
-            JOIN ROL r ON u.id_rol = r.id_rol 
-            WHERE u.username = %s AND u.activo = 1
-        """, (username,))
-        user = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        
-        if not user or not check_password(password, user['password']):
-            messagebox.showerror("Error", "Usuario o contraseña incorrectos")
-            registrar_bitacora(0, "INTENTO_FALLIDO", f"Usuario: {username}", None)
+        if not conn:
             return
         
-        # Verificar si es primer ingreso
-        if user['is_temporary']:
-            self.cambiar_primera_contraseña(user)
-        else:
-            self.abrir_menu_principal(user)
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("""
+                SELECT u.*, r.nombre as rol_nombre 
+                FROM USUARIO u 
+                JOIN ROL r ON u.id_rol = r.id_rol 
+                WHERE u.username = %s AND u.activo = 1
+            """, (username,))
+            user = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            
+            if not user or not check_password(password, user['password']):
+                messagebox.showerror("Error", "Usuario o contraseña incorrectos")
+                registrar_bitacora(0, "INTENTO_FALLIDO", f"Usuario: {username}", None)
+                return
+            
+            # Verificar si es primer ingreso
+            if user['is_temporary']:
+                self.cambiar_primera_contraseña(user)
+            else:
+                self.abrir_menu_principal(user)
+        except Error as e:
+            messagebox.showerror("Error de base de datos", f"Error: {e}")
+            conn.close()
     
     def cambiar_primera_contraseña(self, user):
         ventana = tk.Toplevel(self.root)
